@@ -11,6 +11,8 @@ certifi==2025.1.31
     #   requests
 charset-normalizer==3.4.1
     # via requests
+greenlet==3.2.3
+    # via playwright
 h11==0.14.0
     # via httpcore
 httpcore==1.0.8
@@ -22,6 +24,12 @@ idna==3.10
     #   anyio
     #   httpx
     #   requests
+playwright==1.52.0
+    # via bottelegram (pyproject.toml)
+polars==1.30.0
+    # via bottelegram (pyproject.toml)
+pyee==13.0.0
+    # via playwright
 python-dotenv==1.1.0
     # via bottelegram (pyproject.toml)
 python-telegram-bot==22.0
@@ -35,6 +43,8 @@ sniffio==1.3.1
 soupsieve==2.6
     # via beautifulsoup4
 typing-extensions==4.13.2
-    # via beautifulsoup4
+    # via
+    #   beautifulsoup4
+    #   pyee
 urllib3==2.4.0
     # via requests

@@ -15,7 +15,7 @@ async def send_telegram_notificaction(message:str):
 	try:
 		bot = Bot(token=TELEGRAM_TOKEN)
 		await bot.send_message(chat_id=CHAT_ID, text=message)
-		await bot.send_document(chat_id=CHAT_ID, document=open("products.csv", "rb"))
+		await bot.send_document(chat_id=CHAT_ID, document=open("./output/products.csv", "rb"))
 	except TelegramError as e:
 		print(f"Error al enviar notificacion: {e}")
 

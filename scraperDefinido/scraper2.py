@@ -43,5 +43,5 @@ def scrape_website():
 	playwright.stop()
 
 	df  = pl.DataFrame(products, schema=["Titulo", "Precio", "Link"],orient="row")
-	df.write_csv("products.csv")
+	df.write_csv("./output/products.csv")
 	
