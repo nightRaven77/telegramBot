@@ -26,77 +26,93 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 ¿Qué artículo deseas buscar?")
     return WAITING_ARTICLE  # Pasa al siguiente estado
 
+
+async def scrape_mercadolibre(articulo: str, page) -> List[Dict]:
+    await page.goto(f"https://listado.mercadolibre.com.mx/{articulo.replace(' ', '-')}")
+    # Extracción de datos
+    return [{
+        "titulo": await title.inner_text(),
+        "precio": (await price.inner_text()).replace("$", "").replace(",", ""),
+        "enlace": await link.get_attribute("href"),
+        "sitio": "MercadoLibre"
+    } async for title, price, link in zip(
+        page.locator("h2.ui-search-item__title").all(),
+        page.locator("span.price-tag-amount").all(),
+        page.locator("a.ui-search-item__group__element").all()
+    )]
+
+async def scrape_amazon(articulo: str, page) -> List[Dict]:
+    await page.goto(f"https://www.amazon.com.mx/s?k={articulo.replace(' ', '+')}")
+    # Extracción de datos (selectores de Amazon)
+    return [{
+        "titulo": await title.inner_text(),
+        "precio": (await price.inner_text()).split("$")[-1].replace(",", ""),
+        "enlace": f"https://www.amazon.com.mx{await link.get_attribute('href')}",
+        "sitio": "Amazon"
+    } async for title, price, link in zip(
+        page.locator("span.a-text-normal").all(),
+        page.locator("span.a-price-whole").all(),
+        page.locator("a.a-link-normal.s-no-outline").all()
+    )]
+
+async def scrape_all_sites(articulo: str) -> pl.DataFrame:
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+
+        # Scraping paralelo
+        tasks = []
+        async with context.new_page() as page:
+            tasks.append(scrape_mercadolibre(articulo, page))
+            tasks.append(scrape_amazon(articulo, page))
+
+        results = await asyncio.gather(*tasks)
+        await browser.close()
+
+        # Combina resultados y crea DataFrame
+        flat_results = [item for sublist in results for item in sublist]
+        df = pl.DataFrame(flat_results).with_columns(
+            pl.col("precio").cast(pl.Float64),
+            pl.lit(datetime.now()).alias("fecha_consulta")
+        )
+
+        return df
+
 # Escucha el artículo del usuario
 async def recibir_articulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     articulo = update.message.text
+    await update.message.reply_text(f"🔍 Buscando '{articulo}' en MercadoLibre y Amazon...")
 
-    await update.message.reply_text(f"Buscando '{articulo}'... ⏳")
+    try:
+        df = await scrape_all_sites(articulo)
 
-    df = await scrape_with_playwright(articulo)
+        if df.is_empty():
+            await update.message.reply_text("❌ No hay resultados en ningún sitio.")
+            return ConversationHandler.END
 
-    if df.is_empty():
-        await update.message.reply_text("❌ No encontré resultados.")
-        return ConversationHandler.END
+        # Genera CSV comparativo
+        csv_path = f"comparativo_{articulo[:15]}.csv"
+        df.write_csv(csv_path)
 
-    if not df.is_empty():
-        stats = df.select([
-            pl.col("Precio").cast(pl.Float64).mean().alias("precio_promedio"),
-            pl.col("Precio").cast(pl.Float64).max().alias("precio_max")
+        # Envía archivo con análisis rápido
+        stats = df.group_by("sitio").agg([
+            pl.col("precio").mean().alias("precio_promedio"),
+            pl.count().alias("resultados")
         ])
-        await update.message.reply_text(
-            f"📌 Estadísticas:\n{stats.to_pandas().to_markdown()}"
+
+        await update.message.reply_document(
+            document=open(csv_path, "rb"),
+            caption=f"📊 {len(df)} resultados totales\n{stats.to_pandas().to_markdown()}"
         )
 
-    # Guarda el CSV temporalmente
-    csv_path = f"resultados_{articulo[:20]}.csv"
-    df.write_csv(csv_path)
+        os.remove(csv_path)
 
-    # Envía el CSV al usuario
-    await update.message.reply_document(
-        document=open(csv_path, "rb"),
-        caption=f"📊 {len(df)} resultados para '{articulo}'"
-    )
-
-
-    # Opcional: Borra el archivo después de enviarlo
-    import os
-    os.remove(csv_path)
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error: {str(e)}")
 
     return ConversationHandler.END
 
-# Scraping con Playwright
-async def scrape_with_playwright(articulo: str) -> pl.DataFrame:
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
 
-        await page.goto(f"https://listado.mercadolibre.com.mx/{articulo.replace(' ', '-')}")
-
-        await page.wait_for_selector("#shipping_highlighted_fulfillment", timeout=2000)
-        await page.click("#shipping_highlighted_fulfillment")
-        await page.wait_for_selector("li.ui-search-layout__item", timeout=5000)
-        items = await page.query_selector_all("li.ui-search-layout__item")
-
-        results = []
-
-        for item in items:
-            title = await item.query_selector("h3")
-            price = await item.query_selector("span.andes-money-amount__fraction")
-            link = await item.query_selector("a")
-
-            title_val = await title.inner_text() if title else ""
-            price_val = await price.inner_text() if price else ""
-            link_val = await link.get_attribute("href") if link else ""
-            fecha_consulta = datetime.now()
-
-            results.append((title_val.strip(), float(price_val.replace(',', '').strip()), link_val, fecha_consulta.__str__()))
-
-        await browser.close()
-
-        # Crea DataFrame con Polars
-        df = pl.DataFrame(results, schema=["Titulo", "Precio", "Link", "fecha_consulta"], orient="row")
-
-        return df
 
 # Manejo de errores
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):

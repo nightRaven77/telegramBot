@@ -6,7 +6,6 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
-from typing import Dict, List
 from datetime import datetime
 
 load_dotenv()
@@ -31,36 +30,37 @@ async def recibir_articulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     articulo = update.message.text
 
     await update.message.reply_text(f"Buscando '{articulo}'... ⏳")
+    try:
+        df = await scrape_with_playwright(articulo)
 
-    df = await scrape_with_playwright(articulo)
+        if df.is_empty():
+            await update.message.reply_text("❌ No encontré resultados.")
+            return ConversationHandler.END
 
-    if df.is_empty():
-        await update.message.reply_text("❌ No encontré resultados.")
-        return ConversationHandler.END
+        if not df.is_empty():
+            stats = df.select([
+                pl.col("Precio").cast(pl.Float64).mean().alias("precio_promedio"),
+                pl.col("Precio").cast(pl.Float64).max().alias("precio_max")
+            ])
+            await update.message.reply_text(
+                f"📌 Estadísticas:\n{stats.to_pandas().to_markdown()}"
+            )
 
-    if not df.is_empty():
-        stats = df.select([
-            pl.col("Precio").cast(pl.Float64).mean().alias("precio_promedio"),
-            pl.col("Precio").cast(pl.Float64).max().alias("precio_max")
-        ])
-        await update.message.reply_text(
-            f"📌 Estadísticas:\n{stats.to_pandas().to_markdown()}"
+        # Guarda el CSV temporalmente
+        csv_path = f"resultados_{articulo[:20]}.csv"
+        df.write_csv(csv_path)
+
+        # Envía el CSV al usuario
+        await update.message.reply_document(
+            document=open(csv_path, "rb"),
+            caption=f"📊 {len(df)} resultados para '{articulo}'"
         )
 
-    # Guarda el CSV temporalmente
-    csv_path = f"resultados_{articulo[:20]}.csv"
-    df.write_csv(csv_path)
-
-    # Envía el CSV al usuario
-    await update.message.reply_document(
-        document=open(csv_path, "rb"),
-        caption=f"📊 {len(df)} resultados para '{articulo}'"
-    )
-
-
-    # Opcional: Borra el archivo después de enviarlo
-    import os
-    os.remove(csv_path)
+        # Opcional: Borra el archivo después de enviarlo
+        import os
+        os.remove(csv_path)
+    except Exception as error:
+        await update.message.reply_text(f"⚠️ Error: {str(error)}")
 
     return ConversationHandler.END
 
